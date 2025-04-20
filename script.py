@@ -3,21 +3,56 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from statsmodels.tsa.arima.model import ARIMA
+import requests
 
 
-# Ma'lumotlarni yuklash (namuna ma'lumotlar)
-def load_data():
-    data = {
-        "Yil": list(range(2010, 2025)),
-        "YIM": [34.2, 37.5, 41.0, 45.2, 50.1, 55.5, 61.3, 67.8, 74.0, 80.5, 88.0, 96.5, 106.0, 116.7, 128.2],
-        "Inflyatsiya": [7.8, 8.1, 8.5, 8.9, 9.2, 9.7, 10.2, 11.0, 11.8, 12.5, 13.3, 14.0, 14.8, 15.5, 16.2],
-        "Ishsizlik": [9.5, 9.3, 9.0, 8.8, 8.6, 8.4, 8.2, 8.0, 7.8, 7.5, 7.3, 7.1, 6.9, 6.7, 6.5]
+# Fetch data dynamically from the World Bank API
+def fetch_world_bank_data(indicator, country="UZ", start_year=2010, end_year=2023):
+    url = f"http://api.worldbank.org/v2/country/{country}/indicator/{indicator}?date={start_year}:{end_year}&format=json"
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        # Extract relevant data
+        records = []
+        for item in data[1]:
+            year = int(item['date'])
+            value = item['value']
+            records.append({"Yil": year, indicator: value})
+        df = pd.DataFrame(records).dropna()  # Drop missing values
+        df.sort_values(by="Yil", inplace=True)  # Sort by year
+        return df
+    else:
+        st.error(f"Failed to fetch data for indicator {indicator}. Status code: {response.status_code}")
+        return None
+
+
+# Combine fetched data into a single DataFrame
+def load_dynamic_data():
+    # Define indicators (World Bank codes)
+    indicators = {
+        "NY.GDP.MKTP.KD.ZG": "YIM",  # GDP growth (annual %)
+        "FP.CPI.TOTL.ZG": "Inflyatsiya",  # Inflation, consumer prices (annual %)
+        "SL.UEM.TOTL.ZS": "Ishsizlik"  # Unemployment rate (% of total labor force)
     }
-    return pd.DataFrame(data)
+    data_frames = []
+    for code, name in indicators.items():
+        df = fetch_world_bank_data(code)
+        if df is not None:
+            df.rename(columns={code: name}, inplace=True)
+            data_frames.append(df)
+
+    # Merge all data into one DataFrame
+    combined_df = data_frames[0]
+    for df in data_frames[1:]:
+        combined_df = pd.merge(combined_df, df, on="Yil", how="outer")
+
+    combined_df.sort_values(by="Yil", inplace=True)
+    return combined_df
 
 
+# Forecast using ARIMA
 def forecast(data, column, years=5):
-    model = ARIMA(data[column], order=(2, 1, 2))
+    model = ARIMA(data[column].dropna(), order=(2, 1, 2))  # ARIMA(p, d, q)
     model_fit = model.fit()
     forecast = model_fit.forecast(steps=years)
     return forecast
@@ -26,19 +61,39 @@ def forecast(data, column, years=5):
 # Streamlit UI
 st.title("O‘zbekiston iqtisodiy ko‘rsatkichlari")
 
-data = load_data()
-st.write("### Asosiy ma'lumotlar")
-st.dataframe(data)
+# Load dynamic data
+data = load_dynamic_data()
 
-# Vizualizatsiya: YIM o‘sishi
-yim_chart = px.line(data, x="Yil", y="YIM", title="Yalpi Ichki Mahsulot (YIM) o‘sishi", markers=True)
-st.plotly_chart(yim_chart)
+if data is not None and not data.empty:
+    st.write("### Asosiy ma'lumotlar")
+    st.dataframe(data)
 
-# Vizualizatsiya: Inflyatsiya va Ishsizlik
-fig = px.line(data, x="Yil", y=["Inflyatsiya", "Ishsizlik"], title="Inflyatsiya va Ishsizlik darajasi", markers=True)
-st.plotly_chart(fig)
+    # Vizualizatsiya: YIM o‘sishi
+    yim_chart = px.line(data, x="Yil", y="YIM", title="Yalpi Ichki Mahsulot (YIM) o‘sishi", markers=True)
+    st.plotly_chart(yim_chart)
 
-# Prognoz qilish
-st.write("### YIM prognozi (5 yil) ")
-forecast_data = forecast(data, "YIM")
-st.line_chart(np.concatenate((data["YIM"].values, forecast_data)))
+    # Vizualizatsiya: Inflyatsiya va Ishsizlik
+    fig = px.line(data, x="Yil", y=["Inflyatsiya", "Ishsizlik"],
+                  title="Inflyatsiya va Ishsizlik darajasi", markers=True)
+    st.plotly_chart(fig)
+
+    # Prognoz qilish
+    st.write("### YIM prognozi (2024-2028)")
+    forecast_years = 5
+    forecast_data = forecast(data, "YIM", years=forecast_years)
+    future_years = list(range(data["Yil"].max() + 1, data["Yil"].max() + 1 + forecast_years))
+    forecast_df = pd.DataFrame({
+        "Yil": future_years,
+        "YIM": forecast_data
+    })
+
+    # Combine actual and forecasted data
+    full_data = pd.concat([data[["Yil", "YIM"]], forecast_df])
+    full_data["Turi"] = ["Haqiqiy" if yil <= data["Yil"].max() else "Prognoz" for yil in full_data["Yil"]]
+
+    # Plot forecasted data
+    forecast_chart = px.line(full_data, x="Yil", y="YIM", color="Turi",
+                             title="YIM o‘sishi va prognozi", markers=True)
+    st.plotly_chart(forecast_chart)
+else:
+    st.error("Ma'lumotlarni yuklashda xatolik yuz berdi.")
