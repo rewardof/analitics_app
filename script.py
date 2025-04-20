@@ -29,7 +29,7 @@ def fetch_world_bank_data(indicator, country="UZ", start_year=2010, end_year=202
 # Combine fetched data into a single DataFrame
 def load_dynamic_data():
     indicators = {
-        "NY.GDP.MKTP.KD.ZG": "YIM",
+        "NY.GDP.MKTP.CD": "YIM",
         "FP.CPI.TOTL.ZG": "Inflyatsiya",
         "SL.UEM.TOTL.ZS": "Ishsizlik"
     }
